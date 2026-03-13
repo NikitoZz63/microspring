@@ -3,6 +3,7 @@ package yabudu;
 import yabudu.annotation.MyAutowired;
 import yabudu.annotation.MyComponent;
 import yabudu.annotation.MyQualifier;
+import yabudu.annotation.MyScope;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
@@ -146,26 +147,39 @@ public class ApplicationContext {
                 // разрешаем доступ даже если он private
                 constructor.setAccessible(true);
 
-                // создаём новый объект бин
-                Object bean = constructor.newInstance();
+                MyScope scope = scannedClass.getAnnotation(MyScope.class);
 
-                // генерируем имя бина
-                MyComponent myComponent = scannedClass.getAnnotation(MyComponent.class);
+                String scopeValue;
 
-                //проверяем не указано ли имя бина в аннотации
-                if (!myComponent.beanName().equals(noNameBeanFlag)) {
-                    beanName = myComponent.beanName();
+                if (scope == null) {
+                    scopeValue = "singleton";
                 } else {
-                    beanName = generateBeanName(scannedClass);
+                    scopeValue = scope.scope();
                 }
 
-                // проверяем, что такого бина ещё нет
-                if (beanContainer.containsKey(beanName)) {
-                    throw new IllegalStateException("Duplicate bean name: " + beanName);
-                }
+                if (!"prototype".equals(scopeValue)) {
 
-                // сохраняем бин в контейнер
-                beanContainer.put(beanName, bean);
+                    // создаём новый объект бин
+                    Object bean = constructor.newInstance();
+
+                    // генерируем имя бина
+                    MyComponent myComponent = scannedClass.getAnnotation(MyComponent.class);
+
+                    //проверяем не указано ли имя бина в аннотации
+                    if (!myComponent.beanName().equals(noNameBeanFlag)) {
+                        beanName = myComponent.beanName();
+                    } else {
+                        beanName = generateBeanName(scannedClass);
+                    }
+
+                    // проверяем, что такого бина ещё нет
+                    if (beanContainer.containsKey(beanName)) {
+                        throw new IllegalStateException("Duplicate bean name: " + beanName);
+                    }
+
+                    // сохраняем бин в контейнер
+                    beanContainer.put(beanName, bean);
+                }
             }
         }
     }
@@ -173,60 +187,87 @@ public class ApplicationContext {
 
     //Генерирует имя бина. UserService -> userService
     public String generateBeanName(Class<?> clazz) {
-
         String simpleName = clazz.getSimpleName();
-
         return Character.toLowerCase(simpleName.charAt(0)) + simpleName.substring(1);
     }
 
 
     //Контейнер проходит по всем бинам, ищет поля с @MyAutowired и вставляет нужный бин.
-    public void injectDependencies() {
-
+    public void injectDependencies() throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
         for (Object bean : beanContainer.values()) {
 
-            //получаем текущий класс
-            Class<?> currentClass = bean.getClass();
+//            //получаем текущий класс
+//            Class<?> currentClass = bean.getClass();
+//
+//            //идем циклом по ирерахии классов(на случай если есть наследование)
+//            while (currentClass != Object.class) {
+//
+//                // получаем все поля класса
+//                Field[] fields = currentClass.getDeclaredFields();
+//
+//                for (Field field : fields) {
+//
+//                    // если поле не помечено @MyAutowired — пропускаем
+//                    if (!field.isAnnotationPresent(MyAutowired.class)) {
+//                        continue;
+//                    }
+//
+//                    // ищем нужный бин
+//                    Object dependency = getObject(field);
+//
+//                    try {
+//                        // разрешаем доступ к private полю
+//                        field.setAccessible(true);
+//
+//                        // устанавливаем значение поля(внедряем зависимость)
+//                        field.set(bean, dependency);
+//                    } catch (IllegalAccessException e) {
+//                        throw new RuntimeException("Failed to inject dependency: " + field.getName(), e);
+//                    }
+//                }
+//                //получаем род класс
+//                currentClass = currentClass.getSuperclass();
+//            }
 
+            injectDependencies(bean);
+        }
+    }
 
-            //идем циклом по ирерахии классов(на случай если есть наследование)
-            while (currentClass != Object.class) {
+    public void injectDependencies(Object bean) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
+        //получаем текущий класс
+        Class<?> currentClass = bean.getClass();
 
-                // получаем все поля класса
-                Field[] fields = currentClass.getDeclaredFields();
+        //идем циклом по ирерахии классов(на случай если есть наследование)
+        while (currentClass != Object.class) {
 
-                for (Field field : fields) {
-
-                    // если поле не помечено @MyAutowired — пропускаем
-                    if (!field.isAnnotationPresent(MyAutowired.class)) {
-                        continue;
-                    }
+            // получаем все поля класса
+            Field[] fields = currentClass.getDeclaredFields();
+            for (Field field : fields) {
+                // если поле не помечено @MyAutowired — пропускаем
+                if (field.isAnnotationPresent(MyAutowired.class)) {
 
                     // ищем нужный бин
                     Object dependency = getObject(field);
 
                     try {
-
                         // разрешаем доступ к private полю
                         field.setAccessible(true);
 
                         // устанавливаем значение поля(внедряем зависимость)
                         field.set(bean, dependency);
-
-
                     } catch (IllegalAccessException e) {
                         throw new RuntimeException("Failed to inject dependency: " + field.getName(), e);
                     }
                 }
-                //получаем род класс
-                currentClass = currentClass.getSuperclass();
             }
+            //получаем род класс
+            currentClass = currentClass.getSuperclass();
         }
     }
 
 
     // поиск нужного бина для поля.
-    private Object getObject(Field field) {
+    private Object getObject(Field field) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
 
         // проверяем есть ли @MyQualifier
         MyQualifier qualifier = field.getAnnotation(MyQualifier.class);
@@ -245,18 +286,24 @@ public class ApplicationContext {
 
     public void buildDependencyGraph() {
         dependGraph.clear();
+        //обход по всем просанированным классам и поиск анотации MyComponent
         for (Class<?> scannedClass : scannedClasses) {
             if (!scannedClass.isAnnotationPresent(MyComponent.class)) {
                 continue;
             }
+
+
             List<Class<?>> depList = new ArrayList<>();
             Field[] fields = scannedClass.getDeclaredFields();
 
+            //цикл по поляем класса и ищем MyAutowired
             for (Field field : fields) {
                 if (!field.isAnnotationPresent(MyAutowired.class)) {
                     continue;
                 }
+
                 Class<?> dependencyClass = field.getType();
+                //добавляем в лист с зависимыми классами если находим такой в scannedClasses
                 if (scannedClasses.contains(dependencyClass)) {
                     depList.add(dependencyClass);
                 }
@@ -270,6 +317,7 @@ public class ApplicationContext {
         Set<Class<?>> visited = new HashSet<>();
         Set<Class<?>> visiting = new HashSet<>();
 
+        //Если класс уже проверяли на циклические зависимости, то проверять снова не нужно
         for (Class<?> aClass : dependGraph.keySet()) {
             if (!visited.contains(aClass)) {
                 checkDependencies(aClass, visited, visiting);
@@ -294,6 +342,10 @@ public class ApplicationContext {
         //получаем все зависимости класса
         List<Class<?>> dependencies = dependGraph.get(clazz);
 
+        if (dependencies == null) {
+            return;
+        }
+
         //цикл по завимостям, и рекурсия по этим же зависимостям
         for (Class<?> dependency : dependencies) {
             checkDependencies(dependency, visited, visiting);
@@ -305,42 +357,150 @@ public class ApplicationContext {
 
 
     // Получить бин по имени
-    public Object getBean(String name) {
+    public Object getBean(String name) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
 
+        // пытаемся получить бин из контейнера singleton-бинов.
+        // beanContainer хранит уже созданные объекты (singleton).
+        // Если бин там есть — значит он уже был создан ранее и его можно сразу вернуть.
         Object bean = beanContainer.get(name);
+        if (bean != null) {
+            return bean;
+        }
 
-        if (bean == null) {
+        // Если бин не найден в контейнере, нужно определить,
+        // какой класс соответствует этому имени бина.
+        // Для этого проходим по всем ранее отсканированным классам.
+        Class<?> beanClass = null;
+        for (Class<?> clazz : scannedClasses) {
+
+            // Пропускаем классы, которые не являются компонентами
+            if (!clazz.isAnnotationPresent(MyComponent.class)) {
+                continue;
+            }
+
+            // Получаем аннотацию компонента
+            MyComponent component = clazz.getAnnotation(MyComponent.class);
+
+            // Определяем имя бина.
+            // Если имя указано в аннотации — используем его,
+            // иначе генерируем имя автоматически
+            String beanName;
+            if (!component.beanName().equals(noNameBeanFlag)) {
+                beanName = component.beanName();
+            } else {
+                beanName = generateBeanName(clazz);
+            }
+
+            // Если имя совпало с искомым — нашли нужный класс
+            if (beanName.equals(name)) {
+                beanClass = clazz;
+                break;
+            }
+        }
+
+        // Если ни один класс не соответствует этому имени это ошибка конфигурации
+        if (beanClass == null) {
             throw new IllegalStateException("No bean found with name: " + name);
         }
 
-        return bean;
+        // Определяем scope
+        // Если аннотация @MyScope отсутствует - по умолчанию считаем бин singleton.
+        MyScope scope = beanClass.getAnnotation(MyScope.class);
+        String scopeValue = scope == null ? "singleton" : scope.scope();
+
+        // Обработка singleton scope.
+        // Если бин singleton, но он ещё не создан (его нет в контейнере),
+        // создаём новый экземпляр и кладём его в beanContainer.
+        if ("singleton".equals(scopeValue)) {
+
+            // Получаем конструктор без параметров
+            Constructor<?> constructor = beanClass.getDeclaredConstructor();
+
+            // Разрешаем доступ, даже если конструктор private
+            constructor.setAccessible(true);
+
+            // Создаём новый объект через reflection
+            Object newBean = constructor.newInstance();
+
+            // Выполняем внедрение зависимостей
+            injectDependencies(newBean);
+
+            // Сохраняем созданный singleton в контейнер
+            beanContainer.put(name, newBean);
+
+            // Возвращаем созданный бин
+            return newBean;
+        }
+
+        // Обработка prototype scope.
+        // кажды вызов getBean создаёт новый объект.
+        // НЕ сохраняем его в контейнере!!
+        if ("prototype".equals(scopeValue)) {
+
+            // Получаем конструктор
+            Constructor<?> constructor = beanClass.getDeclaredConstructor();
+
+            // Разрешаем доступ
+            constructor.setAccessible(true);
+
+            // Создаём новый объект
+            Object newBean = constructor.newInstance();
+
+            // Внедряем зависимости
+            injectDependencies(newBean);
+
+            // Возвращаем новый объект (не сохраняется в контейн)
+            return newBean;
+        }
+
+        // Если указан неизвестный scope
+        throw new IllegalStateException("Unknown scope: " + scopeValue);
     }
 
 
     // Получить бин по типу
+    public <T> T getBean(Class<T> type) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
 
-    public <T> T getBean(Class<T> type) {
-        List<Object> candidates = new ArrayList<>();
+        List<String> candidates = new ArrayList<>();
 
-        // ищем все бины подходящего типа
-        for (Object bean : beanContainer.values()) {
-            if (type.isAssignableFrom(bean.getClass())) {
-                candidates.add(bean);
+        // Ищем подходящие классы среди всех найденных при сканировании
+        for (Class<?> clazz : scannedClasses) {
+
+            // Нас интересуют только классы, помеченные как компоненты
+            if (!clazz.isAnnotationPresent(MyComponent.class)) {
+                continue;
+            }
+
+            // Проверяем, подходит ли класс под требуемый тип
+            if (type.isAssignableFrom(clazz)) {
+
+                MyComponent component = clazz.getAnnotation(MyComponent.class);
+
+                // Определяем имя бина
+                String beanName;
+                if (!component.beanName().equals(noNameBeanFlag)) {
+                    beanName = component.beanName();
+                } else {
+                    beanName = generateBeanName(clazz);
+                }
+
+                candidates.add(beanName);
             }
         }
 
-        // если ничего не нашли
+        // Если кандидатов нет — это ошибка
         if (candidates.isEmpty()) {
             throw new IllegalStateException("No bean found for type: " + type.getName());
         }
 
-        // если нашли несколько — ошибка
+        // Если кандидатов несколько — нужно использовать @MyQualifier
         if (candidates.size() > 1) {
             throw new IllegalStateException(
                     "Multiple beans found for type: " + type.getName() + ". Use @MyQualifier to specify which bean to inject.");
         }
 
-        return type.cast(candidates.get(0));
+        // Делегируем создание/получение бина методу getBean(String)
+        return (T) getBean(candidates.get(0));
     }
 
 }
