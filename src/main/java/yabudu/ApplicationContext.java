@@ -20,6 +20,13 @@ public class ApplicationContext {
     private final Map<String, Object> beanContainer = new HashMap<>();
     //мапа(граф) зависимостей
     private final Map<Class<?>, List<Class<?>>> dependGraph = new HashMap<>();
+
+    //хранилище бинов отдельно для каждого потока
+    private final Map<String, ThreadLocal<Object>> threadLocalBeans = new HashMap<>();
+
+    //имя-класс
+    private final Map<String, Class<?>> threadScopedClasses = new HashMap<>();
+
     // пакет, который мы будем сканировать
     private final String basePackage;
     private final String noNameBeanFlag = "__UNSPECIFIED__";
@@ -141,11 +148,15 @@ public class ApplicationContext {
             // проверяем есть ли аннотация @MyComponent
             if (scannedClass.isAnnotationPresent(MyComponent.class)) {
 
-                // получаем конструктор без параметров
-                Constructor<?> constructor = scannedClass.getDeclaredConstructor();
+                // генерируем имя бина
+                MyComponent myComponent = scannedClass.getAnnotation(MyComponent.class);
 
-                // разрешаем доступ даже если он private
-                constructor.setAccessible(true);
+                //проверяем не указано ли имя бина в аннотации
+                if (!myComponent.beanName().equals(noNameBeanFlag)) {
+                    beanName = myComponent.beanName();
+                } else {
+                    beanName = generateBeanName(scannedClass);
+                }
 
                 MyScope scope = scannedClass.getAnnotation(MyScope.class);
 
@@ -157,20 +168,9 @@ public class ApplicationContext {
                     scopeValue = scope.scope();
                 }
 
-                if (!"prototype".equals(scopeValue)) {
-
+                if ("singleton".equals(scopeValue)) {
                     // создаём новый объект бин
-                    Object bean = constructor.newInstance();
-
-                    // генерируем имя бина
-                    MyComponent myComponent = scannedClass.getAnnotation(MyComponent.class);
-
-                    //проверяем не указано ли имя бина в аннотации
-                    if (!myComponent.beanName().equals(noNameBeanFlag)) {
-                        beanName = myComponent.beanName();
-                    } else {
-                        beanName = generateBeanName(scannedClass);
-                    }
+                    Object bean = createBeanInstance(scannedClass);
 
                     // проверяем, что такого бина ещё нет
                     if (beanContainer.containsKey(beanName)) {
@@ -179,6 +179,11 @@ public class ApplicationContext {
 
                     // сохраняем бин в контейнер
                     beanContainer.put(beanName, bean);
+                }
+
+                if ("thread".equals(scopeValue)) {
+                    threadLocalBeans.put(beanName, new ThreadLocal<>());
+                    threadScopedClasses.put(beanName, scannedClass);
                 }
             }
         }
@@ -358,7 +363,6 @@ public class ApplicationContext {
 
     // Получить бин по имени
     public Object getBean(String name) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
-
         // пытаемся получить бин из контейнера singleton-бинов.
         // beanContainer хранит уже созданные объекты (singleton).
         // Если бин там есть — значит он уже был создан ранее и его можно сразу вернуть.
@@ -412,15 +416,8 @@ public class ApplicationContext {
         // Если бин singleton, но он ещё не создан (его нет в контейнере),
         // создаём новый экземпляр и кладём его в beanContainer.
         if ("singleton".equals(scopeValue)) {
-
-            // Получаем конструктор без параметров
-            Constructor<?> constructor = beanClass.getDeclaredConstructor();
-
-            // Разрешаем доступ, даже если конструктор private
-            constructor.setAccessible(true);
-
-            // Создаём новый объект через reflection
-            Object newBean = constructor.newInstance();
+            // Создаём новый объект через reflection в методе createBeanInstance
+            Object newBean = createBeanInstance(beanClass);
 
             // Выполняем внедрение зависимостей
             injectDependencies(newBean);
@@ -436,15 +433,8 @@ public class ApplicationContext {
         // кажды вызов getBean создаёт новый объект.
         // НЕ сохраняем его в контейнере!!
         if ("prototype".equals(scopeValue)) {
-
-            // Получаем конструктор
-            Constructor<?> constructor = beanClass.getDeclaredConstructor();
-
-            // Разрешаем доступ
-            constructor.setAccessible(true);
-
             // Создаём новый объект
-            Object newBean = constructor.newInstance();
+            Object newBean = createBeanInstance(beanClass);
 
             // Внедряем зависимости
             injectDependencies(newBean);
@@ -453,8 +443,38 @@ public class ApplicationContext {
             return newBean;
         }
 
+        if ("thread".equals(scopeValue)) {
+            ThreadLocal<Object> threadLocal = threadLocalBeans.get(name);
+
+            //пытаемся получить бин для текущего потока
+            bean = threadLocal.get();
+
+            if (bean == null) {
+                //српзу находим класс по имени в threadScopedClasses
+                beanClass = threadScopedClasses.get(name);
+
+                //создаем бин
+                bean = createBeanInstance(beanClass);
+
+                injectDependencies(bean);
+
+                //записываем бин threadLocalBeans
+                threadLocal.set(bean);
+            }
+            return bean;
+        }
+
         // Если указан неизвестный scope
         throw new IllegalStateException("Unknown scope: " + scopeValue);
+    }
+
+    //создаем бин через рефлексию
+    private Object createBeanInstance(Class<?> beanClass) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
+        Constructor<?> constructor = beanClass.getDeclaredConstructor();
+
+        constructor.setAccessible(true);
+
+        return constructor.newInstance();
     }
 
 
