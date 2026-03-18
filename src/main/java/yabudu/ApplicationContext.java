@@ -1,14 +1,12 @@
 package yabudu;
 
-import yabudu.annotation.MyAutowired;
-import yabudu.annotation.MyComponent;
-import yabudu.annotation.MyQualifier;
-import yabudu.annotation.MyScope;
+import yabudu.annotation.*;
 
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.*;
@@ -18,24 +16,23 @@ public class ApplicationContext {
 
     // Основное хранилище бинов
     private final Map<String, Object> beanContainer = new HashMap<>();
+    // список всех прроцессоров, которые контейнер зарегистрировал
+    private final List<MyBeanPostProcessor> beanPostProcessors = new ArrayList<>();
+    //список бинов, которые уже успешно прошли lifecycle
+    private final List<Object> initializedBeans = new ArrayList<>();
     //мапа(граф) зависимостей
     private final Map<Class<?>, List<Class<?>>> dependGraph = new HashMap<>();
-
     //хранилище бинов отдельно для каждого потока
     private final Map<String, ThreadLocal<Object>> threadLocalBeans = new HashMap<>();
-
     //имя-класс
     private final Map<String, Class<?>> threadScopedClasses = new HashMap<>();
-
     // пакет, который мы будем сканировать
     private final String basePackage;
     private final String noNameBeanFlag = "__UNSPECIFIED__";
     // список всех найденных классов во время сканирования
     private final List<Class<?>> scannedClasses = new ArrayList<>();
 
-
     // Конструктор контейнера, запускает все.
-
     public ApplicationContext(String basePackager) {
         this.basePackage = basePackager;
 
@@ -50,16 +47,15 @@ public class ApplicationContext {
             // Строим граф зависимостей
             buildDependencyGraph();
 
-            // Проверяем граф на циклические зависимости
-            detectCycles();
+            // Создаём и инициализируем все BeanPostProcessor,
+            registerBeanPostProcessors();
 
             // Создаём объекты (бины)
             createBeans();
 
-            // Внедряем зависимости
-            injectDependencies();
 
         } catch (Exception e) {
+            close();
             throw new RuntimeException("Failed to initialize ApplicationContext", e);
         }
     }
@@ -177,6 +173,8 @@ public class ApplicationContext {
                         throw new IllegalStateException("Duplicate bean name: " + beanName);
                     }
 
+                    bean = initializeBean(bean, beanName);
+
                     // сохраняем бин в контейнер
                     beanContainer.put(beanName, bean);
                 }
@@ -200,40 +198,6 @@ public class ApplicationContext {
     //Контейнер проходит по всем бинам, ищет поля с @MyAutowired и вставляет нужный бин.
     public void injectDependencies() throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
         for (Object bean : beanContainer.values()) {
-
-//            //получаем текущий класс
-//            Class<?> currentClass = bean.getClass();
-//
-//            //идем циклом по ирерахии классов(на случай если есть наследование)
-//            while (currentClass != Object.class) {
-//
-//                // получаем все поля класса
-//                Field[] fields = currentClass.getDeclaredFields();
-//
-//                for (Field field : fields) {
-//
-//                    // если поле не помечено @MyAutowired — пропускаем
-//                    if (!field.isAnnotationPresent(MyAutowired.class)) {
-//                        continue;
-//                    }
-//
-//                    // ищем нужный бин
-//                    Object dependency = getObject(field);
-//
-//                    try {
-//                        // разрешаем доступ к private полю
-//                        field.setAccessible(true);
-//
-//                        // устанавливаем значение поля(внедряем зависимость)
-//                        field.set(bean, dependency);
-//                    } catch (IllegalAccessException e) {
-//                        throw new RuntimeException("Failed to inject dependency: " + field.getName(), e);
-//                    }
-//                }
-//                //получаем род класс
-//                currentClass = currentClass.getSuperclass();
-//            }
-
             injectDependencies(bean);
         }
     }
@@ -413,31 +377,24 @@ public class ApplicationContext {
         String scopeValue = scope == null ? "singleton" : scope.scope();
 
         // Обработка singleton scope.
-        // Если бин singleton, но он ещё не создан (его нет в контейнере),
-        // создаём новый экземпляр и кладём его в beanContainer.
+        // Singleton-бин создаётся заранее в createBeans() и уже лежит в beanContainer.
+        // Если мы дошли сюда и бин не найден — это ошибка, потому что singleton должен существовать в контейнере с самого начала
         if ("singleton".equals(scopeValue)) {
-            // Создаём новый объект через reflection в методе createBeanInstance
-            Object newBean = createBeanInstance(beanClass);
-
-            // Выполняем внедрение зависимостей
-            injectDependencies(newBean);
-
-            // Сохраняем созданный singleton в контейнер
-            beanContainer.put(name, newBean);
-
-            // Возвращаем созданный бин
-            return newBean;
+            if (bean != null) {
+                return bean;
+            }
+            throw new IllegalStateException("Singleton bean not found: " + name);
         }
 
         // Обработка prototype scope.
-        // кажды вызов getBean создаёт новый объект.
+        // Каждый вызов getBean создаёт новый объект.
         // НЕ сохраняем его в контейнере!!
         if ("prototype".equals(scopeValue)) {
             // Создаём новый объект
             Object newBean = createBeanInstance(beanClass);
 
-            // Внедряем зависимости
-            injectDependencies(newBean);
+            //инициализация бина
+            newBean = initializeBean(newBean, name);
 
             // Возвращаем новый объект (не сохраняется в контейн)
             return newBean;
@@ -454,12 +411,11 @@ public class ApplicationContext {
                 beanClass = threadScopedClasses.get(name);
 
                 //создаем бин
-                bean = createBeanInstance(beanClass);
-
-                injectDependencies(bean);
-
+                Object newBean = createBeanInstance(beanClass);
+                //инициализация бина
+                newBean = initializeBean(newBean, name);
                 //записываем бин threadLocalBeans
-                threadLocal.set(bean);
+                threadLocal.set(newBean);
             }
             return bean;
         }
@@ -521,6 +477,148 @@ public class ApplicationContext {
 
         // Делегируем создание/получение бина методу getBean(String)
         return (T) getBean(candidates.get(0));
+    }
+
+    private void registerBeanPostProcessors() throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
+        // по всем классам которые контейнер нашёл при сканировании пакета
+        for (Class<?> scannedClass : scannedClasses) {
+
+            // Если на классе нет @MyComponent, значит это не бин контейнера, пропускаем
+            if (!scannedClass.isAnnotationPresent(MyComponent.class)) {
+                continue;
+            }
+
+            // Проверяем, реализует ли класс интерфейс MyBeanPostProcessor.
+            if (!MyBeanPostProcessor.class.isAssignableFrom(scannedClass)) {
+                continue;
+            }
+
+            // Создаём экземпляр найденного BeanPostProcessor через reflection.
+            Object processorBean = createBeanInstance(scannedClass);
+
+            // Внедряем зависимости в сам BeanPostProcessor
+            injectDependencies(processorBean);
+
+            // Прогоняем процессор через все уже зарегистрированные before-процессоры.
+            processorBean = applyBeanPostProcessorsBeforeInitialization(
+                    processorBean,
+                    generateBeanName(scannedClass)
+            );
+
+            // Вызываем метод с аннотацией @MyPostConstruct у самого BeanPostProcessor.
+            invokePostConstruct(processorBean);
+
+            // Прогоняем процессор через after-процессоры.
+            processorBean = applyBeanPostProcessorsAfterInitialization(
+                    processorBean,
+                    generateBeanName(scannedClass)
+            );
+
+            // Кладём готовый объект в список зарегистрированных BeanPostProcessor.
+            beanPostProcessors.add((MyBeanPostProcessor) processorBean);
+
+            // Сохраняем этот бин в список успешно инициализированных бинов
+            // Это нужно для корректного завершения контейнера, позже при close() контейнер сможет вызвать у него @MyPreDestroy.
+            initializedBeans.add(processorBean);
+        }
+    }
+
+    private void invokePostConstruct(Object bean) throws InvocationTargetException, IllegalAccessException {
+        Method foundMethod = null;
+
+        Class<?> currentClass = bean.getClass();
+
+        while (currentClass != Object.class) {
+            for (Method declaredMethod : currentClass.getDeclaredMethods()) {
+                if (declaredMethod.isAnnotationPresent(MyPostConstruct.class)) {
+                    if (foundMethod != null) {
+                        throw new IllegalStateException("Multiple @MyPostConstruct methods found in class: " + bean.getClass().getName());
+                    }
+                    foundMethod = declaredMethod;
+                }
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+
+        if (foundMethod != null) {
+            foundMethod.setAccessible(true);
+            foundMethod.invoke(bean);
+        }
+
+    }
+
+    private void invokePreDestroy(Object bean) throws InvocationTargetException, IllegalAccessException {
+        Method foundMethod = null;
+        Class<?> currentClass = bean.getClass();
+
+        while (currentClass != Object.class) {
+            for (Method declaredMethod : currentClass.getDeclaredMethods()) {
+                if (declaredMethod.isAnnotationPresent(MyPreDestroy.class)) {
+                    if (foundMethod != null) {
+                        throw new IllegalStateException("Multiple @MyPreDestroy methods found in class: " + bean.getClass().getName());
+                    }
+                    foundMethod = declaredMethod;
+                }
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+
+        if (foundMethod != null) {
+            foundMethod.setAccessible(true);
+            foundMethod.invoke(bean);
+        }
+
+    }
+
+    private Object applyBeanPostProcessorsAfterInitialization(Object bean, String beanName) {
+        Object currentBean = bean;
+        for (MyBeanPostProcessor beanPostProcessor : beanPostProcessors) {
+            currentBean = beanPostProcessor.postProcessAfterInitialization(currentBean, beanName);
+        }
+        return currentBean;
+    }
+
+
+    private Object applyBeanPostProcessorsBeforeInitialization(Object bean, String beanName) {
+        Object currentBean = bean;
+        for (MyBeanPostProcessor beanPostProcessor : beanPostProcessors) {
+            currentBean = beanPostProcessor.postProcessBeforeInitialization(currentBean, beanName);
+        }
+        return currentBean;
+    }
+
+    private Object initializeBean(Object bean, String beanName) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
+        // Внедрение зависимостей
+        injectDependencies(bean);
+
+        // Вызов всех BeanPostProcessor ДО пользовательской инициализации
+        bean = applyBeanPostProcessorsBeforeInitialization(bean, beanName);
+
+        // Вызывается метод помеченный @MyPostConstruct.
+        invokePostConstruct(bean);
+
+        // Вызов всех BeanPostProcessor ПОСЛЕ инициализации
+        bean = applyBeanPostProcessorsAfterInitialization(bean, beanName);
+
+        // Сохраняем бин как успешно инициализированный
+        // При вызове close контейнер пройдётся по этим бинам и вызовет у них методы с MyPreDestroy.
+        initializedBeans.add(bean);
+
+        return bean;
+    }
+
+
+    public void close() {
+        ListIterator<Object> iterator = initializedBeans.listIterator(initializedBeans.size());
+
+        while (iterator.hasPrevious()) {
+            Object bean = iterator.previous();
+            try {
+                invokePreDestroy(bean);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to destroy bean: " + bean.getClass().getName(), e);
+            }
+        }
     }
 
 }
