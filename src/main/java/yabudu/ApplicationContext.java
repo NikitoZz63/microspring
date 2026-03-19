@@ -31,6 +31,8 @@ public class ApplicationContext {
     private final String noNameBeanFlag = "__UNSPECIFIED__";
     // список всех найденных классов во время сканирования
     private final List<Class<?>> scannedClasses = new ArrayList<>();
+    // отсортированный список бинов по зависимостям
+    private List<Class<?>> sortedBeans = new ArrayList<>();
 
     // Конструктор контейнера, запускает все.
     public ApplicationContext(String basePackager) {
@@ -47,6 +49,10 @@ public class ApplicationContext {
             // Строим граф зависимостей
             buildDependencyGraph();
 
+            detectCycles();
+
+            topologicalSort();
+
             // Создаём и инициализируем все BeanPostProcessor,
             registerBeanPostProcessors();
 
@@ -57,6 +63,83 @@ public class ApplicationContext {
         } catch (Exception e) {
             close();
             throw new RuntimeException("Failed to initialize ApplicationContext", e);
+        }
+    }
+
+    private void topologicalSort() {
+        sortedBeans.clear();
+        // inDegree - сколько зависимостей у каждого бина
+        Map<Class<?>, Integer> inDegree = new HashMap<>();
+
+        // reverseGraph - обратный граф зависимостей
+        // ключ = бин (зависимость)
+        // значение = список бинов, которые зависят от него
+        Map<Class<?>, List<Class<?>>> reverseGraph = new HashMap<>();
+
+        // для каждого бина:
+        // inDegree = 0 (пока считаем, что зависимостей нет)
+        // создаём пустой список в reverseGraph
+        for (Class<?> clazz : dependGraph.keySet()) {
+            inDegree.put(clazz, 0);
+            reverseGraph.put(clazz, new ArrayList<>());
+        }
+
+        // аполняем inDegree и reverseGraph
+        // dependGraph (A зависит от B и C)
+        for (Map.Entry<Class<?>, List<Class<?>>> entry : dependGraph.entrySet()) {
+            Class<?> clazz = entry.getKey();          // текущий бин
+            List<Class<?>> dependencies = entry.getValue(); // его зависимости
+
+            inDegree.put(clazz, dependencies.size());
+
+            // строим reverseGraph, если B готов - теперь A может работать
+            for (Class<?> dependency : dependencies) {
+                reverseGraph.get(dependency).add(clazz);
+            }
+        }
+
+        // сюда кладём бины, которые можно создать прямо сейчас
+        Queue<Class<?>> queue = new LinkedList<>();
+
+        for (Map.Entry<Class<?>, Integer> entry : inDegree.entrySet()) {
+            if (entry.getValue() == 0) {
+                queue.add(entry.getKey());
+            }
+        }
+
+        //пока есть кто-то готовый к созданию
+        while (!queue.isEmpty()) {
+
+            // достаём из очереди бин без зависимостей
+            Class<?> clazz = queue.poll();
+
+            // добавляем его в итоговый список
+            sortedBeans.add(clazz);
+
+            // получаем все бины, которые зависят от текущего
+            List<Class<?>> dependents = reverseGraph.get(clazz);
+
+            // если никто не зависит — идём дальше
+            if (dependents == null) {
+                continue;
+            }
+
+            // уменьшаем inDegree у зависимых бинов
+            for (Class<?> dependent : dependents) {
+
+                // уменьшаем количество оставшихся зависимостей
+                inDegree.put(dependent, inDegree.get(dependent) - 1);
+
+                // если зависимостей больше нет → можно создавать бин
+                if (inDegree.get(dependent) == 0) {
+                    queue.add(dependent);
+                }
+            }
+        }
+
+        // если не все бины обработались → есть циклическая зависимость
+        if (sortedBeans.size() != dependGraph.size()) {
+            throw new IllegalStateException("Cycle detected in dependency graph");
         }
     }
 
@@ -139,7 +222,8 @@ public class ApplicationContext {
     //Создаём объекты (бины) для всех классов с аннотацией @MyComponent.
     public void createBeans() throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
         String beanName;
-        for (Class<?> scannedClass : scannedClasses) {
+        // используем отсортированный список, чтобы сначала создавались зависимости
+        for (Class<?> scannedClass : sortedBeans) {
 
             // проверяем есть ли аннотация @MyComponent
             if (scannedClass.isAnnotationPresent(MyComponent.class)) {
