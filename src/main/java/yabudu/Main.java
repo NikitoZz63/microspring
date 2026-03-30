@@ -7,7 +7,7 @@ import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 public class Main {
     public static void main(String[] args) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException, IOException {
-        // 🔥 ВАЖНО: сканируем ВСЮ базовую папку, а не только testClasses
+        // сканируем ВСЮ базовую папку, а не только testClasses
         // иначе AopBeanPostProcessor (лежит в yabudu) не найдётся
         ApplicationContext context = new ApplicationContext("yabudu");
 
