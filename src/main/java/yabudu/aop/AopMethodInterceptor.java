@@ -1,9 +1,9 @@
 package yabudu.aop;
 
-import net.sf.cglib.proxy.MethodInterceptor;  // Интерфейс CGLIB для перехвата вызовов методов у прокси
-import net.sf.cglib.proxy.MethodProxy;        // Утилита CGLIB для эффективного вызова оригинального метода
+import net.sf.cglib.proxy.MethodInterceptor;
+import net.sf.cglib.proxy.MethodProxy;
 
-import java.lang.reflect.Method;              // Класс для работы с методами через reflection
+import java.lang.reflect.Method;
 
 // CGLIB обработчик
 // Этот класс используется, когда бин НЕ имеет интерфейсов.

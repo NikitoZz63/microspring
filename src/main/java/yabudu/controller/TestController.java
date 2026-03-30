@@ -1,6 +1,9 @@
 package yabudu.controller;
 
-import yabudu.annotation.*;
+import yabudu.annotation.MyController;
+import yabudu.annotation.MyPathVariable;
+import yabudu.annotation.MyRequestMapping;
+import yabudu.annotation.MyRequestParam;
 
 @MyController
 public class TestController {

@@ -8,4 +8,5 @@ import static java.lang.annotation.RetentionPolicy.RUNTIME;
 
 @Target(ElementType.PARAMETER)
 @Retention(RUNTIME)
-public @interface MyRequestBody {}
+public @interface MyRequestBody {
+}

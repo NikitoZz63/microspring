@@ -11,6 +11,10 @@ public class User {
     @MyAutowired
     private User self;
 
+    public User() {
+        System.out.println("User constructor");
+    }
+
     @MyLogged
     public void methodA() {
         System.out.println("A start");
@@ -20,10 +24,6 @@ public class User {
     @MyLogged
     public void methodB() {
         System.out.println("B work");
-    }
-
-    public User() {
-        System.out.println("User constructor");
     }
 
     @MyPostConstruct

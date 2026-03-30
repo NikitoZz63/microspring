@@ -929,7 +929,7 @@ public class ApplicationContext {
         return false;
     }
 
-     // Находит аннотацию @MyComponent для класса, если она есть (прямая или meta-аннотация).
+    // Находит аннотацию @MyComponent для класса, если она есть (прямая или meta-аннотация).
     private MyComponent findMyComponentAnnotation(Class<?> clazz) {
 
         //  Прямое наличие @MyComponent

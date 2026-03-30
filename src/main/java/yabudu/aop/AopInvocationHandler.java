@@ -1,7 +1,7 @@
 package yabudu.aop;
 
-import java.lang.reflect.InvocationHandler;   // Интерфейс JDK Proxy для перехвата вызовов методов
-import java.lang.reflect.Method;              // Класс для работы с методами через reflection
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
 
 // Этот класс используется, когда бин ИМЕЕТ интерфейсы.
 // JDK Proxy создаёт объект, реализующий интерфейс, и все вызовы попадают сюда (в invoke).

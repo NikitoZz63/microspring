@@ -20,13 +20,11 @@ import java.util.Map;
 
 public class DispatcherServlet {
 
-    // здесь будем хранить все маршруты
-    private final Map<String, HandlerMethod> mappings = new HashMap<>();
-
-    private final ApplicationContext context;
-
     private static final ObjectMapper JSON_MAPPER = new ObjectMapper();
     private static final XmlMapper XML_MAPPER = new XmlMapper();
+    // здесь будем хранить все маршруты
+    private final Map<String, HandlerMethod> mappings = new HashMap<>();
+    private final ApplicationContext context;
 
     public DispatcherServlet(ApplicationContext context) throws IOException {
         this.context = context;

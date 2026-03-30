@@ -7,17 +7,17 @@ import yabudu.annotation.MyPreDestroy;
 @MyComponent
 public class Person {
 
-public Person() {
-    System.out.println("Person constructor");
-}
+    public Person() {
+        System.out.println("Person constructor");
+    }
 
-@MyPostConstruct
-public void init() {
-    System.out.println("Person init");
-}
+    @MyPostConstruct
+    public void init() {
+        System.out.println("Person init");
+    }
 
-@MyPreDestroy
-public void destroy() {
-    System.out.println("Person destroy");
-}
+    @MyPreDestroy
+    public void destroy() {
+        System.out.println("Person destroy");
+    }
 }
