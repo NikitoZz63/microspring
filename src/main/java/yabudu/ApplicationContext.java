@@ -32,7 +32,7 @@ public class ApplicationContext {
     // список всех найденных классов во время сканирования
     private final List<Class<?>> scannedClasses = new ArrayList<>();
     // отсортированный список бинов по зависимостям
-    private List<Class<?>> sortedBeans = new ArrayList<>();
+    private final List<Class<?>> sortedBeans = new ArrayList<>();
 
     // Конструктор контейнера, запускает все.
     public ApplicationContext(String basePackager) {
@@ -165,6 +165,9 @@ public class ApplicationContext {
         return new File(url.getFile());
     }
 
+    public List<Class<?>> getScannedClasses() {
+        return scannedClasses;
+    }
 
     //Сканирует директорию и находит все .class файлы. Если встречается подпапка — вызываем метод рекурсивно
     public void scanDirectory(String currentDirectory, String currentPackageName) {
@@ -231,15 +234,18 @@ public class ApplicationContext {
         for (Class<?> scannedClass : sortedBeans) {
 
             // проверяем есть ли аннотация @MyComponent
-            if (scannedClass.isAnnotationPresent(MyComponent.class)) {
+            if (isComponent(scannedClass)) {
 
                 if (MyBeanPostProcessor.class.isAssignableFrom(scannedClass)) {
                     continue;
                 }
 
                 // генерируем имя бина
-                MyComponent myComponent = scannedClass.getAnnotation(MyComponent.class);
+                MyComponent myComponent = findMyComponentAnnotation(scannedClass);
 
+                if (myComponent == null) {
+                    throw new IllegalStateException("Component annotation not found for: " + scannedClass.getName());
+                }
                 //проверяем не указано ли имя бина в аннотации
                 if (!myComponent.beanName().equals(noNameBeanFlag)) {
                     beanName = myComponent.beanName();
@@ -265,14 +271,16 @@ public class ApplicationContext {
                         throw new IllegalStateException("Duplicate bean name: " + beanName);
                     }
 
-                    // СРАЗУ кладём сырой бин в контейнер пока без proxy, чтобы зависимости могли разрешаться
+                    // Кладём сырой бин в контейнер ДО инициализации
+                    // другие бины найдут его во время injectDependencies
+                    // корректно обработаем циклические зависимости
+                    // поддержим self-injection
                     beanContainer.put(beanName, bean);
 
-                    //  выполняем полный lifecycle (injectDependencies, @PostConstruct и т.д.)
-                    // внутри initializeBean уже будет вызван postProcessAfterInitialization
+                    // Запускаем lifecycle бина (proxy + inject + @PostConstruct)
                     Object initializedBean = initializeBean(bean, beanName);
 
-                    // Обновляем бин в контейнере (если он был заменён на proxy)
+                    // Заменяем сырой бин на финальный объект (proxy)
                     beanContainer.put(beanName, initializedBean);
                 }
 
@@ -293,7 +301,16 @@ public class ApplicationContext {
 
     //  получение имени бина для любого класса
     private String resolveBeanName(Class<?> clazz) {
+        // Если это proxy (CGLIB), берём оригинальный класс
+        if (!clazz.isAnnotationPresent(MyComponent.class)) {
+            clazz = clazz.getSuperclass();
+        }
+
         MyComponent component = clazz.getAnnotation(MyComponent.class);
+
+        if (component == null) {
+            throw new IllegalStateException("Class is not a bean: " + clazz.getName());
+        }
 
         // если имя задано явно — используем его
         if (!component.beanName().equals(noNameBeanFlag)) {
@@ -304,8 +321,7 @@ public class ApplicationContext {
         return generateBeanName(clazz);
     }
 
-
-    //Контейнер проходит по всем бинам, ищет поля с @MyAutowired и вставляет нужный бин.
+    // Контейнер проходит по всем бинам, ищет поля с @MyAutowired и вставляет нужный бин.
     public void injectDependencies() throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
         for (Object bean : beanContainer.values()) {
             injectDependencies(bean);
@@ -313,11 +329,11 @@ public class ApplicationContext {
     }
 
     public void injectDependencies(Object bean) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
-        //получаем текущий класс
+        // Получаем текущий класс
         Class<?> currentClass = bean.getClass();
 
-        //идем циклом по ирерахии классов(на случай если есть наследование)
-        while (currentClass != Object.class) {
+        // Идем циклом по иерархии классов(на случай если есть наследование)
+        while (currentClass != null && currentClass != Object.class) {
 
             // получаем все поля класса
             Field[] fields = currentClass.getDeclaredFields();
@@ -330,10 +346,19 @@ public class ApplicationContext {
                     // чтобы внутри getObject можно было проверить что singleton-бин не должен напрямую получать thread-scoped бин
                     Object dependency = getObject(field, bean);
 
-                    // если тип поля совпадает с самим бином - подставляем proxy
-                    if (field.getType().isAssignableFrom(bean.getClass())) {
-                        String beanName = resolveBeanName(bean.getClass());
-                        dependency = beanContainer.get(beanName);
+                    // SELF-INJECTION: корректно работаем с proxy
+                    Class<?> beanClass = bean.getClass();
+                    // proxy не имеет анотации MyComponent(проверяем настоящий класс или proxy)
+                    if (!beanClass.isAnnotationPresent(MyComponent.class)) {
+                        beanClass = beanClass.getSuperclass();
+                    }
+
+                    // Тип поля совместим с текущим бинoм?
+                    if (field.getType().isAssignableFrom(beanClass)) {
+                        String selfBeanName = resolveBeanName(beanClass);
+
+                        // self-injection: подставляем proxy из контейнера
+                        dependency = beanContainer.get(selfBeanName);
                     }
 
                     try {
@@ -390,7 +415,7 @@ public class ApplicationContext {
 
         // Ищем все классы-кандидаты, подходящие по типу.
         for (Class<?> candidate : scannedClasses) {
-            if (!candidate.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(candidate)) {
                 continue;
             }
 
@@ -429,7 +454,7 @@ public class ApplicationContext {
         for (Class<?> candidate : scannedClasses) {
 
             // Берём только бины
-            if (!candidate.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(candidate)) {
                 continue;
             }
 
@@ -454,7 +479,7 @@ public class ApplicationContext {
         for (Class<?> scannedClass : scannedClasses) {
 
             // Граф строим только для классов, которые являются бинами контейнера
-            if (!scannedClass.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(scannedClass)) {
                 continue;
             }
 
@@ -464,7 +489,7 @@ public class ApplicationContext {
             // Поднимаемся по иерархии классов, чтобы увидеть поля родительских классов.
             Class<?> currentClass = scannedClass;
 
-            while (currentClass != Object.class) {
+            while (currentClass != null && currentClass != Object.class) {
 
                 // Берём только поля текущего уровня иерархии
                 Field[] fields = currentClass.getDeclaredFields();
@@ -491,8 +516,10 @@ public class ApplicationContext {
                                             field.getName() + "' in class " + scannedClass.getName());
                         }
 
-                        // Если qualifier указан, добавляем только этот конкретный бин.
-                        depSet.add(qualifiedClass);
+                        // игнорируем self-зависимость
+                        if (!qualifiedClass.equals(scannedClass)) {
+                            depSet.add(qualifiedClass);
+                        }
 
                         // При наличии qualifier не нужно дополнительно искать всех кандидатов по типу
                         continue;
@@ -504,13 +531,16 @@ public class ApplicationContext {
                     for (Class<?> candidate : scannedClasses) {
 
                         // Учитываем только реальные бины контейнера.
-                        if (!candidate.isAnnotationPresent(MyComponent.class)) {
+                        if (!isComponent(candidate)) {
                             continue;
                         }
 
                         // Проверяем совместимость типа.
                         if (dependencyType.isAssignableFrom(candidate)) {
-                            depSet.add(candidate);
+                            // игнорируем self-зависимость (класс не должен считаться зависимым сам от себя)
+                            if (!candidate.equals(scannedClass)) {
+                                depSet.add(candidate);
+                            }
                         }
                     }
                 }
@@ -537,7 +567,7 @@ public class ApplicationContext {
         }
     }
 
-    //проверка циклической зависимости
+    // Проверка циклической зависимости
     public void checkDependencies(Class<?> clazz, Set<Class<?>> visited, Set<Class<?>> visiting, Deque<Class<?>> path) {
         // Если текущий класс уже находится в visiting, значит мы снова пришли в него во время обхода - это цикл.
         if (visiting.contains(clazz)) {
@@ -568,7 +598,7 @@ public class ApplicationContext {
             throw new IllegalStateException("Cyclic dependency detected: " + cycle);
         }
 
-        //проверен ли класс ранее(убедились ли мы что нет там цикла)
+        // Проверен ли класс ранее(убедились ли мы что нет там цикла)
         if (visited.contains(clazz)) {
             return;
         }
@@ -576,15 +606,20 @@ public class ApplicationContext {
 
         visiting.add(clazz);
 
-        //получаем все зависимости класса
+        // Получаем все зависимости класса
         List<Class<?>> dependencies = dependGraph.get(clazz);
 
         if (dependencies == null) {
             return;
         }
 
-        //цикл по завимостям, и рекурсия по этим же зависимостям
+        // Цикл по завимостям, и рекурсия по этим же зависимостям
         for (Class<?> dependency : dependencies) {
+
+            // Игнорируем self-зависимость
+            if (dependency.equals(clazz)) {
+                continue;
+            }
             checkDependencies(dependency, visited, visiting, path);
         }
 
@@ -596,7 +631,7 @@ public class ApplicationContext {
 
     // Получить бин по имени
     public Object getBean(String name) throws NoSuchMethodException, InvocationTargetException, InstantiationException, IllegalAccessException {
-        // пытаемся получить бин из контейнера singleton-бинов.
+        // Пытаемся получить бин из контейнера singleton-бинов.
         // beanContainer хранит уже созданные объекты (singleton).
         // Если бин там есть — значит он уже был создан ранее и его можно сразу вернуть.
         Object bean = beanContainer.get(name);
@@ -611,7 +646,7 @@ public class ApplicationContext {
         for (Class<?> clazz : scannedClasses) {
 
             // Пропускаем классы, которые не являются компонентами
-            if (!clazz.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(clazz)) {
                 continue;
             }
 
@@ -631,7 +666,7 @@ public class ApplicationContext {
         }
 
         // Определяем scope
-        // Если аннотация @MyScope отсутствует - по умолчанию считаем бин singleton.
+        // Если аннотация @MyScope отсутствует - по умолчанию считаем бин singleton
         MyScope scope = beanClass.getAnnotation(MyScope.class);
         String scopeValue = scope == null ? "singleton" : scope.scope();
 
@@ -647,7 +682,7 @@ public class ApplicationContext {
 
         // Обработка prototype scope.
         // Каждый вызов getBean создаёт новый объект.
-        // НЕ сохраняем его в контейнере!!
+        // Не сохраняем его в контейнере!
         if ("prototype".equals(scopeValue)) {
             // Создаём новый объект
             Object newBean = createBeanInstance(beanClass);
@@ -666,14 +701,14 @@ public class ApplicationContext {
             bean = threadLocal.get();
 
             if (bean == null) {
-                //српзу находим класс по имени в threadScopedClasses
+                // Сразу находим класс по имени в threadScopedClasses
                 beanClass = threadScopedClasses.get(name);
 
-                //создаем бин
+                // Создаем бин
                 Object newBean = createBeanInstance(beanClass);
-                //инициализация бина
+                // Инициализация бина
                 newBean = initializeBean(newBean, name);
-                //записываем бин threadLocalBeans
+                // Записываем бин threadLocalBeans
                 threadLocal.set(newBean);
             }
             // Возвращаем актуальный объект из ThreadLocal.
@@ -705,7 +740,7 @@ public class ApplicationContext {
         for (Class<?> clazz : scannedClasses) {
 
             // Нас интересуют только классы, помеченные как компоненты
-            if (!clazz.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(clazz)) {
                 continue;
             }
 
@@ -734,7 +769,7 @@ public class ApplicationContext {
     private void registerBeanPostProcessors() throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
         for (Class<?> scannedClass : scannedClasses) {
 
-            if (!scannedClass.isAnnotationPresent(MyComponent.class)) {
+            if (!isComponent(scannedClass)) {
                 continue;
             }
 
@@ -744,14 +779,16 @@ public class ApplicationContext {
 
             String beanName = resolveBeanName(scannedClass);
 
+            // Создаём процессор один раз
             Object processorBean = createBeanInstance(scannedClass);
 
-            // используем единый lifecycle
-            processorBean = initializeBean(processorBean, beanName);
+            // Внедряем зависимости
+            injectDependencies(processorBean);
 
+            // Добавляем в список процессоров
             beanPostProcessors.add((MyBeanPostProcessor) processorBean);
 
-            // кладем в контейнер чтобы не создавать повторно
+            // Кладём в контейнер
             beanContainer.put(beanName, processorBean);
         }
     }
@@ -821,33 +858,31 @@ public class ApplicationContext {
     }
 
     private Object initializeBean(Object bean, String beanName) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
-        // создание proxy (для self-invocation) создаём proxy ДО injectDependencies
+        // Создаём proxy
         Object earlyProxy = applyBeanPostProcessorsAfterInitialization(bean, beanName);
 
-        // кладём proxy в контейнер временно
+        // Кладём proxy в контейнер до  injectDependencies, чтобы self (@MyAutowired User self) получил именно proxy
         beanContainer.put(beanName, earlyProxy);
 
-        // внедряем зависимости уже в proxy
+        // Внедряем зависимости в proxy
         injectDependencies(earlyProxy);
 
-        // Вызываем все BeanPostProcessor.before() ПОСЛЕ injectDependencies, но ДО @PostConstruct
-        earlyProxy = applyBeanPostProcessorsBeforeInitialization(earlyProxy, beanName);
+        // Вызываем postProcessBeforeInitialization
+        Object currentBean = applyBeanPostProcessorsBeforeInitialization(earlyProxy, beanName);
 
-        // Вызываем метод, помеченный @MyPostConstruct
-        invokePostConstruct(earlyProxy);
+        // Вызываем @PostConstruct
+        invokePostConstruct(currentBean);
 
-        // второй раз proxy НЕ создаём
-        Object finalBean = earlyProxy;
+        Object finalBean = currentBean;
 
-        // Сохраняем бин как успешно инициализированный только если это singleton.
-        // при close() контейнер НЕ должен вызывать у prototype @MyPreDestroy.
-        // В список initializedBeans кладём только те бины, которыми контейнер владеет до конца своей жизни
+        // Сохраняем ТОЛЬКО финальный объект (proxy) для destroy
         Class<?> beanClass = bean.getClass();
         MyScope scope = beanClass.getAnnotation(MyScope.class);
         String scopeValue = scope == null ? "singleton" : scope.scope();
 
         if ("singleton".equals(scopeValue)) {
-            initializedBeans.add(bean);
+            // Сохраняем proxy, а не оригинальный bean
+            initializedBeans.add(finalBean);
         }
 
         return finalBean;
@@ -865,6 +900,62 @@ public class ApplicationContext {
                 throw new RuntimeException("Failed to destroy bean: " + bean.getClass().getName(), e);
             }
         }
+    }
+
+
+    //Проверяет, является ли класс компонентом (бином) контейнера.
+    private boolean isComponent(Class<?> clazz) {
+
+        // Отсекаем аннотации как классы
+        if (clazz.isAnnotation()) {
+            return false;
+        }
+
+        // Проверяем прямое наличие аннотации
+        if (clazz.isAnnotationPresent(MyComponent.class)) {
+            return true;
+        }
+
+        // Проверяем meta-аннотации (аннотации на аннотациях)
+        for (var annotation : clazz.getAnnotations()) {
+
+            // annotation.annotationType() это класс аннотации
+            // проверяем помечена ли сама аннотация как @MyComponent
+            if (annotation.annotationType().isAnnotationPresent(MyComponent.class)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+     // Находит аннотацию @MyComponent для класса, если она есть (прямая или meta-аннотация).
+    private MyComponent findMyComponentAnnotation(Class<?> clazz) {
+
+        //  Прямое наличие @MyComponent
+        if (clazz.isAnnotationPresent(MyComponent.class)) {
+            return clazz.getAnnotation(MyComponent.class);
+        }
+
+        //  Ищем meta-аннотацию
+        for (var annotation : clazz.getAnnotations()) {
+
+            // Получаем тип аннотации
+            Class<?> annotationType = annotation.annotationType();
+
+            // Проверяем есть ли у этой аннотации @MyComponent
+            if (annotationType.isAnnotationPresent(MyComponent.class)) {
+
+                // Возвращаем саму @MyComponent, которая висит на аннотации
+                return annotationType.getAnnotation(MyComponent.class);
+            }
+        }
+
+        return null;
+    }
+
+    public Collection<Object> getAllBeans() {
+        return beanContainer.values();
     }
 
 }

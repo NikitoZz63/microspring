@@ -1,4 +1,4 @@
-package yabudu;
+package yabudu.aop;
 
 import net.sf.cglib.proxy.Enhancer;
 import yabudu.annotation.MyBeanPostProcessor;
@@ -73,7 +73,34 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
         // Передаём объект, который будет перехватывать вызовы методов.
         enhancer.setCallback(new AopMethodInterceptor(bean));
 
-        // Создаём и возвращаем proxy-объект.
-        return enhancer.create();
+        System.out.println("POST PROCESSOR RUN: " + beanName);
+
+        // 🔥 Создаём proxy-объект (НО это новый объект, не тот же самый бин)
+        Object proxy = enhancer.create();
+
+        // 🔥 КРИТИЧНО: копируем все поля из оригинального бина в proxy
+        // иначе зависимости (person, self) будут null и AOP не будет работать
+        copyFields(bean, proxy);
+
+        return proxy;
+    }
+
+    // 🔥 Копирует все поля из оригинального объекта в proxy
+    // Это нужно потому что CGLIB создаёт НОВЫЙ объект,
+    // а не оборачивает существующий
+    private void copyFields(Object source, Object target) {
+        Class<?> clazz = source.getClass();
+
+        while (clazz != Object.class) {
+            for (java.lang.reflect.Field field : clazz.getDeclaredFields()) {
+                field.setAccessible(true);
+                try {
+                    field.set(target, field.get(source));
+                } catch (IllegalAccessException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+            clazz = clazz.getSuperclass();
+        }
     }
 }

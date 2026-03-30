@@ -1,4 +1,4 @@
-package yabudu;
+package yabudu.aop;
 
 import net.sf.cglib.proxy.MethodInterceptor;  // Интерфейс CGLIB для перехвата вызовов методов у прокси
 import net.sf.cglib.proxy.MethodProxy;        // Утилита CGLIB для эффективного вызова оригинального метода
@@ -39,8 +39,9 @@ public class AopMethodInterceptor implements MethodInterceptor {
 
                 // Передаём способо вызова реального метода в виде функционального интерфейса Invocation
                 (AopExecutor.Invocation) () -> {
-                    // Реальный вызов метода у оригинального объекта
-                    return proxy.invoke(target, args);
+                    // 🔥 CGLIB: invokeSuper вызывает оригинальный метод через proxy
+                    // Это критично — если вызвать target напрямую, AOP сломается
+                    return proxy.invokeSuper(obj, args);
                 }
         );
     }

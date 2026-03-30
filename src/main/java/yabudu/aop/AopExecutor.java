@@ -1,4 +1,4 @@
-package yabudu;
+package yabudu.aop;
 
 import yabudu.annotation.MyLogged;
 import yabudu.annotation.MyTransactional;
@@ -13,9 +13,20 @@ public class AopExecutor {
 
     public AopExecutor(Object target) {
         this.target = target;
-        this.targetClass = target.getClass();
+        // 🔥 Если это CGLIB proxy — берём реальный класс (superclass)
+        Class<?> clazz = target.getClass();
+        if (clazz.getName().contains("$$")) {
+            clazz = clazz.getSuperclass();
+        }
+        this.targetClass = clazz;
     }
 
+    // 🔥 execute — центральная точка AOP
+    // здесь происходит:
+    // 1. проверка аннотаций
+    // 2. логирование
+    // 3. транзакции
+    // 4. вызов оригинального метода через Invocation
     // invocation — это способ вызвать реальный метод (мы его передаём снаружи)
     public Object execute(Method method, Object[] args, Invocation invocation) throws Throwable {
 

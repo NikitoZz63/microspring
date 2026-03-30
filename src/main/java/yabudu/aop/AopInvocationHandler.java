@@ -1,4 +1,4 @@
-package yabudu;
+package yabudu.aop;
 
 import java.lang.reflect.InvocationHandler;   // Интерфейс JDK Proxy для перехвата вызовов методов
 import java.lang.reflect.Method;              // Класс для работы с методами через reflection
@@ -34,7 +34,8 @@ public class AopInvocationHandler implements InvocationHandler {
 
                 // Передаём способ вызова оригинального метода
                 (AopExecutor.Invocation) () -> {
-                    // Реальный вызов метода через reflection
+                    // 🔥 JDK Proxy: вызываем оригинальный метод через reflection
+                    // В отличие от CGLIB тут нет invokeSuper, поэтому используем method.invoke
                     return method.invoke(target, args);
                 }
         );
