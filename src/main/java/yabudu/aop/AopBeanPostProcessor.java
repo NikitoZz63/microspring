@@ -40,12 +40,12 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
             }
         }
 
-        // Если AOP-аннотаций нет - возвращаем бин без изменений
+        // Если AOP-аннотаций нет возвращаем бин без изменений
         if (!hasAopAnnotations) {
             return bean;
         }
 
-        // JDK Proxy работает только с интерфейсами.
+        // JDK Proxy работает только с интерфейсами
         // Поэтому сначала проверяем, реализует ли класс хотя бы один интерфейс.
         if (beanClass.getInterfaces().length > 0) {
             return Proxy.newProxyInstance(
@@ -73,19 +73,17 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
         // Передаём объект, который будет перехватывать вызовы методов.
         enhancer.setCallback(new AopMethodInterceptor(bean));
 
-        System.out.println("POST PROCESSOR RUN: " + beanName);
-
-        // 🔥 Создаём proxy-объект (НО это новый объект, не тот же самый бин)
+        // Создаём proxy-объект (НО это новый объект, не тот же самый бин)
         Object proxy = enhancer.create();
 
-        // 🔥 КРИТИЧНО: копируем все поля из оригинального бина в proxy
+        // копируем все поля из оригинального бина в proxy
         // иначе зависимости (person, self) будут null и AOP не будет работать
         copyFields(bean, proxy);
 
         return proxy;
     }
 
-    // 🔥 Копирует все поля из оригинального объекта в proxy
+    // Копирует все поля из оригинального объекта в proxy
     // Это нужно потому что CGLIB создаёт НОВЫЙ объект,
     // а не оборачивает существующий
     private void copyFields(Object source, Object target) {

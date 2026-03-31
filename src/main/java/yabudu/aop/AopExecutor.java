@@ -7,13 +7,12 @@ import java.lang.reflect.Method;
 
 // Этот класс содержит AOP-логику
 public class AopExecutor {
-
     private final Object target;
     private final Class<?> targetClass;
 
     public AopExecutor(Object target) {
         this.target = target;
-        // 🔥 Если это CGLIB proxy — берём реальный класс (superclass)
+        //  — берём реальный класс (superclass)
         Class<?> clazz = target.getClass();
         if (clazz.getName().contains("$$")) {
             clazz = clazz.getSuperclass();
@@ -21,8 +20,7 @@ public class AopExecutor {
         this.targetClass = clazz;
     }
 
-    // 🔥 execute — центральная точка AOP
-    // здесь происходит:
+    // центральная точка AOP
     // 1. проверка аннотаций
     // 2. логирование
     // 3. транзакции
@@ -35,8 +33,6 @@ public class AopExecutor {
                 method.getName(),
                 method.getParameterTypes()
         );
-
-
         if (originalMethod.isAnnotationPresent(MyLogged.class)) {
             System.out.println("LOG START: " + method.getName());
         }
@@ -44,7 +40,6 @@ public class AopExecutor {
         if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
             System.out.println("TRANSACTION BEGIN");
         }
-
         // результат вызова метода
         Object result;
 
@@ -52,16 +47,13 @@ public class AopExecutor {
             // Здесь вызывается реальный метод
             result = invocation.proceed();
         } catch (Exception e) {
-
             if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
                 System.out.println("ROLLBACK");
             }
-
             throw e.getCause() != null ? e.getCause() : e;
         }
 
         // После вызова
-
         if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
             System.out.println("COMMIT");
         }
@@ -69,7 +61,6 @@ public class AopExecutor {
         if (originalMethod.isAnnotationPresent(MyLogged.class)) {
             System.out.println("LOG END: " + method.getName());
         }
-
         return result;
     }
 
