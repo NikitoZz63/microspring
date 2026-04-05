@@ -12,7 +12,7 @@ public class MyHttpHandler implements HttpHandler {
         this.servlet = servlet;
     }
 
-    //вызываем встроенный сервер JDK, когда приходит запрос
+    // Вызываем встроенный сервер JDK, когда приходит запрос
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         servlet.handle(exchange);

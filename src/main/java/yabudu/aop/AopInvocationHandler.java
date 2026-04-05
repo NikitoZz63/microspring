@@ -1,9 +1,10 @@
 package yabudu.aop;
 
+import javax.sql.DataSource;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 
-// Этот класс используется, когда бин ИМЕЕТ интерфейсы.
+// Этот класс используется, когда бин имеет интерфейсы.
 // JDK Proxy создаёт объект, реализующий интерфейс, и все вызовы попадают сюда (в invoke).
 public class AopInvocationHandler implements InvocationHandler {
     // Оригинальный объект (настоящий бин)
@@ -12,10 +13,13 @@ public class AopInvocationHandler implements InvocationHandler {
     // Общий исполнитель AOP-логики
     private final AopExecutor executor;
 
-    // Конструктор: сохраняем бин и создаём executor
-    public AopInvocationHandler(Object target) {
+    private final DataSource dataSource;
+
+    // Конструктор сохраняем бин и создаём executor
+    public AopInvocationHandler(Object target, DataSource dataSource) {
         this.target = target;                    // сохраняем реальный объект
-        this.executor = new AopExecutor(target); // создаём исполнитель AOP-логики
+        this.dataSource = dataSource;
+        this.executor = new AopExecutor(target, dataSource); // создаём исполнитель AOP-логики
     }
 
     @Override
@@ -24,7 +28,7 @@ public class AopInvocationHandler implements InvocationHandler {
         // method — вызываемый метод
         // args — аргументы метода
 
-        // Мы НЕ вызываем метод напрямую здесь - делегируем её в AopExecutor.
+        // Мы не вызываем метод напрямую здесь - делегируем её в AopExecutor.
         return executor.execute(
                 method,
                 args,

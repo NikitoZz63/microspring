@@ -2,25 +2,32 @@ package yabudu.aop;
 
 import yabudu.annotation.MyLogged;
 import yabudu.annotation.MyTransactional;
+import yabudu.jdbc.ConnectionHolder;
 
+import javax.sql.DataSource;
 import java.lang.reflect.Method;
+import java.sql.Connection;
 
 // Этот класс содержит AOP-логику
 public class AopExecutor {
     private final Object target;
     private final Class<?> targetClass;
+    private final DataSource dataSource;
 
-    public AopExecutor(Object target) {
+    public AopExecutor(Object target, DataSource dataSource) {
         this.target = target;
-        //  — берём реальный класс (superclass)
+        this.dataSource = dataSource;
+
+        // берём реальный класс (superclass)
         Class<?> clazz = target.getClass();
+
         if (clazz.getName().contains("$$")) {
             clazz = clazz.getSuperclass();
         }
         this.targetClass = clazz;
     }
 
-    // центральная точка AOP
+    // Центральная точка AOP
     // 1. проверка аннотаций
     // 2. логирование
     // 3. транзакции
@@ -28,40 +35,62 @@ public class AopExecutor {
     // invocation — это способ вызвать реальный метод (мы его передаём снаружи)
     public Object execute(Method method, Object[] args, Invocation invocation) throws Throwable {
 
-        // Находим оригинальный метод в реальном классе
         Method originalMethod = targetClass.getMethod(
                 method.getName(),
                 method.getParameterTypes()
         );
-        if (originalMethod.isAnnotationPresent(MyLogged.class)) {
+
+        boolean isLogged = originalMethod.isAnnotationPresent(MyLogged.class);
+        boolean isTransactional = originalMethod.isAnnotationPresent(MyTransactional.class);
+
+        if (isLogged) {
             System.out.println("LOG START: " + method.getName());
         }
 
-        if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
-            System.out.println("TRANSACTION BEGIN");
-        }
-        // результат вызова метода
-        Object result;
+        Connection connection = null;
+        boolean alreadyInTransaction = (ConnectionHolder.getConnection() != null);
 
         try {
-            // Здесь вызывается реальный метод
-            result = invocation.proceed();
-        } catch (Exception e) {
-            if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
+            // НАЧАЛО ТРАНЗАКЦИИ
+            if (isTransactional && !alreadyInTransaction) {
+                connection = dataSource.getConnection();
+                connection.setAutoCommit(false);
+                ConnectionHolder.setConnection(connection);
+
+                System.out.println("TRANSACTION BEGIN");
+            }
+
+            // вызов метода
+            Object result = invocation.proceed();
+
+            // КОММИТ
+            if (isTransactional && !alreadyInTransaction) {
+                connection.commit();
+                System.out.println("COMMIT");
+            }
+
+            return result;
+
+        } catch (Throwable e) {
+
+            // РОЛЛБЕК
+            if (isTransactional && !alreadyInTransaction && connection != null) {
+                connection.rollback();
                 System.out.println("ROLLBACK");
             }
+
             throw e.getCause() != null ? e.getCause() : e;
-        }
 
-        // После вызова
-        if (originalMethod.isAnnotationPresent(MyTransactional.class)) {
-            System.out.println("COMMIT");
-        }
+        } finally {
+            if (isTransactional && !alreadyInTransaction && connection != null) {
+                ConnectionHolder.clear();
+                connection.close();
+            }
 
-        if (originalMethod.isAnnotationPresent(MyLogged.class)) {
-            System.out.println("LOG END: " + method.getName());
+            if (isLogged) {
+                System.out.println("LOG END: " + method.getName());
+            }
         }
-        return result;
     }
 
     // Интерфейс — как вызвать метод

@@ -1,11 +1,13 @@
 package yabudu.aop;
 
 import net.sf.cglib.proxy.Enhancer;
+import yabudu.ApplicationContext;
 import yabudu.annotation.MyBeanPostProcessor;
 import yabudu.annotation.MyComponent;
 import yabudu.annotation.MyLogged;
 import yabudu.annotation.MyTransactional;
 
+import javax.sql.DataSource;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 
@@ -14,6 +16,19 @@ import java.lang.reflect.Proxy;
 // Если такие аннотации есть, он подменяет обычный бин на proxy-объект
 @MyComponent
 public class AopBeanPostProcessor implements MyBeanPostProcessor {
+
+    private ApplicationContext applicationContext;
+
+    public AopBeanPostProcessor() {
+    }
+
+    public AopBeanPostProcessor(ApplicationContext applicationContext) {
+        this.applicationContext = applicationContext;
+    }
+
+    public void setApplicationContext(ApplicationContext applicationContext) {
+        this.applicationContext = applicationContext;
+    }
 
     @Override
     public Object postProcessBeforeInitialization(Object bean, String beanName) {
@@ -25,7 +40,7 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
         // Получаем реальный класс текущего бина.
         Class<?> beanClass = bean.getClass();
 
-        // Флаг покажет, есть ли у этого бина хотя бы один  методо на котором висит @MyLogged или @MyTransactional
+        // Флаг покажет, есть ли у этого бина хотя бы один метод на котором висит @MyLogged или @MyTransactional
         boolean hasAopAnnotations = false;
 
         // Проходим по всем публичным методам класса.
@@ -48,16 +63,17 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
         // JDK Proxy работает только с интерфейсами
         // Поэтому сначала проверяем, реализует ли класс хотя бы один интерфейс.
         if (beanClass.getInterfaces().length > 0) {
+            DataSource dataSource;
+            try {
+                dataSource = applicationContext.getBean(DataSource.class);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to get DataSource", e);
+            }
+
             return Proxy.newProxyInstance(
-                    // ClassLoader нужен JVM для создания proxy-класса.
                     beanClass.getClassLoader(),
-
-                    // Прокси будет реализовывать те же интерфейсы,
-                    // что и исходный бин.
                     beanClass.getInterfaces(),
-
-                    // Вся логика перехвата вызовов вынесена в отдельный класс.
-                    new AopInvocationHandler(bean)
+                    new AopInvocationHandler(bean, dataSource)
             );
         }
 
@@ -71,9 +87,16 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
         enhancer.setSuperclass(beanClass);
 
         // Передаём объект, который будет перехватывать вызовы методов.
-        enhancer.setCallback(new AopMethodInterceptor(bean));
+        DataSource dataSource;
+        try {
+            dataSource = applicationContext.getBean(DataSource.class);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to get DataSource", e);
+        }
 
-        // Создаём proxy-объект (НО это новый объект, не тот же самый бин)
+        enhancer.setCallback(new AopMethodInterceptor(bean, dataSource));
+
+        // Создаём proxy-объект (Это новый объект, не тот же самый бин)
         Object proxy = enhancer.create();
 
         // копируем все поля из оригинального бина в proxy
@@ -84,8 +107,7 @@ public class AopBeanPostProcessor implements MyBeanPostProcessor {
     }
 
     // Копирует все поля из оригинального объекта в proxy
-    // Это нужно потому что CGLIB создаёт НОВЫЙ объект,
-    // а не оборачивает существующий
+    // CGLIB создаёт новый объект, а не оборачивает существующий
     private void copyFields(Object source, Object target) {
         Class<?> clazz = source.getClass();
 

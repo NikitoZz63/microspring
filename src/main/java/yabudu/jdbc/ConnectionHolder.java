@@ -8,12 +8,12 @@ public class ConnectionHolder {
     // У каждого потока свое значение
     private static final ThreadLocal<Connection> connectionHolder = new ThreadLocal<>();
 
-    public static void setConnection(Connection connection) {
-        connectionHolder.set(connection);
-    }
-
     public static Connection getConnection() {
         return connectionHolder.get();
+    }
+
+    public static void setConnection(Connection connection) {
+        connectionHolder.set(connection);
     }
 
     public static void clear() {

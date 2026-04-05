@@ -3,6 +3,7 @@ package yabudu.aop;
 import net.sf.cglib.proxy.MethodInterceptor;
 import net.sf.cglib.proxy.MethodProxy;
 
+import javax.sql.DataSource;
 import java.lang.reflect.Method;
 
 // CGLIB обработчик
@@ -15,10 +16,13 @@ public class AopMethodInterceptor implements MethodInterceptor {
     // Общий исполнитель AOP-логики
     private final AopExecutor executor;
 
+    private final DataSource dataSource;
+
     // Конструктор: сохраняем оригинальный бин и создаём executor под этот бин
-    public AopMethodInterceptor(Object target) {
+    public AopMethodInterceptor(Object target, DataSource dataSource) {
         this.target = target;                    // сохраняем ссылку на реальный объект
-        this.executor = new AopExecutor(target); // создаём исполнитель AOP-логики
+        this.dataSource = dataSource;
+        this.executor = new AopExecutor(target, dataSource); // создаём исполнитель AOP-логики
     }
 
     @Override
@@ -36,7 +40,6 @@ public class AopMethodInterceptor implements MethodInterceptor {
                 // Передаём способ вызова реального метода в виде функционального интерфейса Invocation
                 (AopExecutor.Invocation) () -> {
                     // invokeSuper вызывает оригинальный метод через proxy
-                    // Это критично — если вызвать target напрямую, AOP сломается
                     return proxy.invokeSuper(obj, args);
                 }
         );

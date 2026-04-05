@@ -1,7 +1,9 @@
 package yabudu;
 
 import yabudu.annotation.*;
+import yabudu.aop.AopBeanPostProcessor;
 
+import javax.sql.DataSource;
 import java.io.File;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
@@ -37,8 +39,12 @@ public class ApplicationContext {
     // Конструктор контейнера, запускает все.
     public ApplicationContext(String basePackager) {
         this.basePackage = basePackager;
-
         try {
+
+            // Создаем ds для подключения к БД
+            DataSource dataSource = DataSourceConfig.create();
+            // Кладем его в контейнер
+            beanContainer.put("dataSource", dataSource);
 
             // Находим физическую папку пакета в classpath
             File baseDir = findPackageDirectory(basePackager);
@@ -107,7 +113,7 @@ public class ApplicationContext {
             }
         }
 
-        //пока есть кто-то готовый к созданию
+        // пока есть кто-то готовый к созданию
         while (!queue.isEmpty()) {
 
             // достаём из очереди бин без зависимостей
@@ -411,6 +417,14 @@ public class ApplicationContext {
 
         // Если qualifier нет — ищем бин по типу поля.
         Class<?> dependencyType = field.getType();
+
+        // Проверяем уже готовые бины (например DataSource)
+        for (Object bean : beanContainer.values()) {
+            if (field.getType().isAssignableFrom(bean.getClass())) {
+                return bean;
+            }
+        }
+
         List<Class<?>> candidates = new ArrayList<>();
 
         // Ищем все классы-кандидаты, подходящие по типу.
@@ -733,7 +747,12 @@ public class ApplicationContext {
 
     // Получить бин по типу
     public <T> T getBean(Class<T> type) throws InvocationTargetException, NoSuchMethodException, InstantiationException, IllegalAccessException {
-
+        // Сначала ищем уже готовые бины
+        for (Object bean : beanContainer.values()) {
+            if (type.isAssignableFrom(bean.getClass())) {
+                return (T) bean;
+            }
+        }
         List<String> candidates = new ArrayList<>();
 
         // Ищем подходящие классы среди всех найденных при сканировании
@@ -781,6 +800,12 @@ public class ApplicationContext {
 
             // Создаём процессор один раз
             Object processorBean = createBeanInstance(scannedClass);
+
+            // если это AOP-процессор — передаём ему ApplicationContext
+            // чтобы он мог получать DataSource и создавать транзакции
+            if (processorBean instanceof AopBeanPostProcessor aopProcessor) {
+                aopProcessor.setApplicationContext(this);
+            }
 
             // Внедряем зависимости
             injectDependencies(processorBean);
