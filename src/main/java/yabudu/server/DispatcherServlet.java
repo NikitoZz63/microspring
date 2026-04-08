@@ -192,7 +192,6 @@ public class DispatcherServlet {
 
                     // Проверяем есть ли аннотация MyRequestParam
                     if (parameter.isAnnotationPresent(MyRequestParam.class)) {
-
                         MyRequestParam paramAnnotation = parameter.getAnnotation(MyRequestParam.class);
                         boolean required = paramAnnotation.required();
                         String paramName = paramAnnotation.value();
@@ -202,19 +201,22 @@ public class DispatcherServlet {
                         if (value == null && required) {
                             throw new MissingRequestParamException(paramName);
                         }
-                        args[i] = value;
+                        // Используем универсальный конвертер
+                        args[i] = convertValue(value, parameter.getType());
 
                     } else if (parameter.isAnnotationPresent(MyPathVariable.class)) {
                         MyPathVariable pathVariableAnnotation = parameter.getAnnotation(MyPathVariable.class);
                         String variableName = pathVariableAnnotation.value();
 
-                        // Достаём значение из path variables
+                        // Достаём значение из path variables (всегда строка)
                         String value = pathVariables.get(variableName);
 
                         if (value == null) {
                             throw new MissingPathVariableException(variableName);
                         }
-                        args[i] = value;
+
+                        // Используем универсальный конвертер
+                        args[i] = convertValue(value, parameter.getType());
                     } else if (parameter.isAnnotationPresent(MyRequestBody.class)) {
                         if (requestBody == null || requestBody.isEmpty()) {
                             throw new EmptyBodyException();
@@ -228,26 +230,28 @@ public class DispatcherServlet {
                     }
                 }
 
-                // Вызываем метод контроллера с аргументами
                 Object result;
 
                 try {
+                    // args уже содержит ВСЕ параметры (query + path + body),
+                    // приведённые к нужным типам - invoke теперь работает корректно
                     result = handler.method.invoke(handler.controller, args);
+
                 } catch (InvocationTargetException e) {
+                    // если внутри метода контроллера ошибка — пробрасываем её
                     throw new RuntimeException(e.getTargetException());
                 }
 
+                // Формируем ответ
                 if (result == null) {
                     exchange.getResponseHeaders().set("Content-Type", "application/json");
                     response = "";
                 } else {
                     try {
-                        // если XML
                         if (acceptHeader != null && acceptHeader.toLowerCase().contains("application/xml")) {
                             response = XML_MAPPER.writeValueAsString(result);
                             exchange.getResponseHeaders().set("Content-Type", "application/xml");
                         } else {
-                            // если JSON
                             response = JSON_MAPPER.writeValueAsString(result);
                             exchange.getResponseHeaders().set("Content-Type", "application/json");
                         }
@@ -371,5 +375,26 @@ public class DispatcherServlet {
             }
         }
         return pathVariables;
+    }
+
+    /**
+     * Универсальный конвертер строки в нужный тип параметра метода.
+     * Используется для path variables и query params.
+     */
+    private Object convertValue(String value, Class<?> paramType) {
+        if (value == null) {
+            return null;
+        }
+
+        if (paramType == Long.class || paramType == long.class) {
+            return Long.valueOf(value);
+        } else if (paramType == Integer.class || paramType == int.class) {
+            return Integer.valueOf(value);
+        } else if (paramType == String.class) {
+            return value;
+        }
+
+        // по умолчанию возвращаем как есть
+        return value;
     }
 }

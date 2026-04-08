@@ -24,7 +24,7 @@ public class AutoRowMapper<T> implements RowMapper<T> {
             int columnCount = metaData.getColumnCount();
 
             for (int i = 1; i <= columnCount; i++) {
-                String columnName = metaData.getColumnName(i);
+                String columnName = metaData.getColumnLabel(i).toLowerCase();
                 Object value = rs.getObject(i);
 
                 // Преобразуем (user_id - userId)
@@ -38,15 +38,26 @@ public class AutoRowMapper<T> implements RowMapper<T> {
                     continue;
                 }
                 field.setAccessible(true);
-                field.set(obj, value);
+                if (value != null) {
+                    Class<?> fieldType = field.getType();
 
+                    // Приводим типы из ResultSet к типам полей
+                    if (fieldType == Long.class || fieldType == long.class) {
+                        field.set(obj, ((Number) value).longValue());
+                    } else if (fieldType == Integer.class || fieldType == int.class) {
+                        field.set(obj, ((Number) value).intValue());
+                    } else if (fieldType == String.class) {
+                        field.set(obj, value.toString());
+                    } else {
+                        field.set(obj, value);
+                    }
+                }
             }
             return obj;
         } catch (Exception e) {
             throw new RuntimeException("Error mapping row to object", e);
         }
     }
-
 
     // Преобразует  в camelCase
     // user_id - userId
